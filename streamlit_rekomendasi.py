@@ -12,8 +12,8 @@ ratings_data = {
 }
 items_data = {
     'itemId': [101, 102, 103],
-    'title': ['Movie A', 'Movie B', 'Movie C'],
-    'genre': ['Action', 'Comedy', 'Action']
+    'title': ['tung tung tung sahoor', 'balerina cappucina', 'bombardilo crocodilo'],
+    'genre': ['comedy', 'romance', 'Action']
 }
 
 ratings = pd.DataFrame(ratings_data)
@@ -41,22 +41,15 @@ def content_based(user_id):
 
 # === COLLABORATIVE FILTERING (tanpa surprise) ===
 def collaborative_filtering(user_id):
-    # Buat matrix user-item
     user_item_matrix = ratings.pivot_table(index='userId', columns='itemId', values='rating').fillna(0)
-
-    # Hitung kemiripan antar user
     similarity = cosine_similarity(user_item_matrix)
     sim_df = pd.DataFrame(similarity, index=user_item_matrix.index, columns=user_item_matrix.index)
 
-    # Ambil user yang mirip
     similar_users = sim_df[user_id].sort_values(ascending=False)[1:]
-
-    # Prediksi rating item yang belum dirating
     user_ratings = user_item_matrix.loc[user_id]
     unrated_items = user_ratings[user_ratings == 0].index
 
     pred_ratings = {}
-
     for item in unrated_items:
         weighted_sum = 0
         sim_sum = 0
@@ -85,8 +78,43 @@ def hybrid_recommendation(user_id, alpha=0.5):
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     return [item_id for item_id, _ in ranked]
 
+# === FUNCTION TO GET USER RATING INPUT ===
+def get_user_ratings():
+    print("\nPlease rate the recommended movies (from 1 to 5):")
+    user_ratings = {}
+    for idx, item_id in enumerate(recommended_items, 1):
+        title = items[items['itemId'] == item_id]['title'].values[0]
+        while True:
+            try:
+                rating = int(input(f"Rate Movie {title} (1-5): "))
+                if 1 <= rating <= 5:
+                    user_ratings[item_id] = rating
+                    break
+                else:
+                    print("Rating should be between 1 and 5. Please try again.")
+            except ValueError:
+                print("Invalid input. Please enter a number between 1 and 5.")
+    return user_ratings
+
 # === TEST OUTPUT ===
 user_test = 1
-print("📌 Content-Based Recommendation for User", user_test, ":", content_based(user_test))
-print("📌 Collaborative Filtering for User", user_test, ":", collaborative_filtering(user_test))
-print("📌 Hybrid Recommendation for User", user_test, ":", hybrid_recommendation(user_test))
+recommended_items = hybrid_recommendation(user_test)
+
+# Menampilkan hasil dengan gaya yang lebih menarik
+print("\n🎬 Recommender System Output for User", user_test)
+
+# Hybrid Recommendation
+print("\n📌 Hybrid Recommendation:")
+for idx, item_id in enumerate(recommended_items, 1):
+    title = items[items['itemId'] == item_id]['title'].values[0]
+    genre = items[items['itemId'] == item_id]['genre'].values[0]
+    print(f"{idx}. {title} - Genre: {genre}")
+
+# Mengambil input rating dari pengguna
+user_ratings = get_user_ratings()
+
+# Menampilkan rating yang diberikan oleh pengguna
+print("\n🎯 Your ratings for the recommended movies:")
+for item_id, rating in user_ratings.items():
+    title = items[items['itemId'] == item_id]['title'].values[0]
+    print(f"Movie: {title}, Your Rating: {rating}")
