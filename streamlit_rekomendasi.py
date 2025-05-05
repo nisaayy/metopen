@@ -1,75 +1,92 @@
-
-import streamlit as st
+# === IMPORT MODULE ===
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from surprise import Dataset, Reader, KNNBasic
-from surprise.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-# Load data
-@st.cache_data
-def load_data():
-    movies = pd.read_csv('movies.csv')
-    ratings = pd.read_csv('ratings.csv')
-    return movies, ratings
+# === DATASET (langsung di dalam kode) ===
+ratings_data = {
+    'userId': [1, 1, 2, 2, 3],
+    'itemId': [101, 102, 101, 103, 102],
+    'rating': [4, 5, 3, 4, 2]
+}
+items_data = {
+    'itemId': [101, 102, 103],
+    'title': ['Movie A', 'Movie B', 'Movie C'],
+    'genre': ['Action', 'Comedy', 'Action']
+}
 
-movies, ratings = load_data()
+ratings = pd.DataFrame(ratings_data)
+items = pd.DataFrame(items_data)
 
-# Content-Based Filtering
-@st.cache_data
-def compute_content_similarity():
-    tfidf = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(movies['genres'])
-    return cosine_similarity(tfidf_matrix, tfidf_matrix)
+# === CONTENT-BASED FILTERING ===
+def content_based(user_id):
+    tfidf = TfidfVectorizer()
+    tfidf_matrix = tfidf.fit_transform(items['genre'])
 
-cosine_sim = compute_content_similarity()
+    item_sim = cosine_similarity(tfidf_matrix)
 
-def recommend_content(title, top_n=5):
-    idx = movies[movies['title'] == title].index[0]
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
-    movie_indices = [i[0] for i in sim_scores]
-    return movies['title'].iloc[movie_indices]
+    user_rated = ratings[ratings['userId'] == user_id]
+    user_scores = {}
 
-# Collaborative Filtering
-@st.cache_resource
-def train_cf():
-    reader = Reader(rating_scale=(0.5, 5))
-    data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
-    trainset, _ = train_test_split(data, test_size=0.2)
-    algo = KNNBasic(sim_options={'name': 'cosine', 'user_based': True})
-    algo.fit(trainset)
-    return algo
+    for _, row in user_rated.iterrows():
+        item_index = items[items['itemId'] == row['itemId']].index[0]
+        sim_scores = list(enumerate(item_sim[item_index]))
+        for idx, score in sim_scores:
+            if items.loc[idx, 'itemId'] not in user_rated['itemId'].values:
+                user_scores[items.loc[idx, 'itemId']] = user_scores.get(items.loc[idx, 'itemId'], 0) + score * row['rating']
 
-algo = train_cf()
+    ranked = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)
+    return [item_id for item_id, _ in ranked]
 
-def recommend_cf(user_id, top_n=5):
-    movie_ids = movies['movieId'].unique()
-    rated = ratings[ratings['userId'] == user_id]['movieId'].tolist()
-    predictions = []
-    for movie_id in movie_ids:
-        if movie_id not in rated:
-            pred = algo.predict(user_id, movie_id)
-            predictions.append((movie_id, pred.est))
-    predictions.sort(key=lambda x: x[1], reverse=True)
-    top_movie_ids = [x[0] for x in predictions[:top_n]]
-    return movies[movies['movieId'].isin(top_movie_ids)]['title']
+# === COLLABORATIVE FILTERING (tanpa surprise) ===
+def collaborative_filtering(user_id):
+    # Buat matrix user-item
+    user_item_matrix = ratings.pivot_table(index='userId', columns='itemId', values='rating').fillna(0)
 
-# Streamlit UI
-st.title("Sistem Rekomendasi: Content-Based vs Collaborative Filtering")
+    # Hitung kemiripan antar user
+    similarity = cosine_similarity(user_item_matrix)
+    sim_df = pd.DataFrame(similarity, index=user_item_matrix.index, columns=user_item_matrix.index)
 
-menu = st.sidebar.selectbox("Pilih Metode Rekomendasi", ["Content-Based", "Collaborative Filtering"])
+    # Ambil user yang mirip
+    similar_users = sim_df[user_id].sort_values(ascending=False)[1:]
 
-if menu == "Content-Based":
-    movie_title = st.selectbox("Pilih Judul Film", movies['title'].sort_values())
-    if st.button("Rekomendasikan"):
-        result = recommend_content(movie_title)
-        st.write("Rekomendasi Film Berdasarkan Genre:")
-        st.write(result)
+    # Prediksi rating item yang belum dirating
+    user_ratings = user_item_matrix.loc[user_id]
+    unrated_items = user_ratings[user_ratings == 0].index
 
-elif menu == "Collaborative Filtering":
-    user_id = st.number_input("Masukkan User ID", min_value=1, step=1)
-    if st.button("Rekomendasikan"):
-        result = recommend_cf(user_id)
-        st.write("Rekomendasi Film Berdasarkan Preferensi Pengguna:")
-        st.write(result)
+    pred_ratings = {}
+
+    for item in unrated_items:
+        weighted_sum = 0
+        sim_sum = 0
+        for other_user, sim_score in similar_users.items():
+            other_rating = user_item_matrix.loc[other_user, item]
+            if other_rating > 0:
+                weighted_sum += sim_score * other_rating
+                sim_sum += sim_score
+        if sim_sum > 0:
+            pred_ratings[item] = weighted_sum / sim_sum
+
+    ranked = sorted(pred_ratings.items(), key=lambda x: x[1], reverse=True)
+    return [item_id for item_id, _ in ranked]
+
+# === HYBRID FILTERING ===
+def hybrid_recommendation(user_id, alpha=0.5):
+    content = content_based(user_id)
+    collab = collaborative_filtering(user_id)
+
+    scores = {}
+    for rank, item_id in enumerate(content):
+        scores[item_id] = scores.get(item_id, 0) + (1 - alpha) * (len(content) - rank)
+    for rank, item_id in enumerate(collab):
+        scores[item_id] = scores.get(item_id, 0) + alpha * (len(collab) - rank)
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [item_id for item_id, _ in ranked]
+
+# === TEST OUTPUT ===
+user_test = 1
+print("📌 Content-Based Recommendation for User", user_test, ":", content_based(user_test))
+print("📌 Collaborative Filtering for User", user_test, ":", collaborative_filtering(user_test))
+print("📌 Hybrid Recommendation for User", user_test, ":", hybrid_recommendation(user_test))
